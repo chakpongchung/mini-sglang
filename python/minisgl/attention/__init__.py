@@ -33,6 +33,13 @@ def create_fi_backend(config: ModelConfig):
     return FlashInferBackend(config)
 
 
+@SUPPORTED_ATTENTION_BACKENDS.register("cutedsl")
+def create_cutedsl_backend(config: ModelConfig):
+    from .cutedsl import CuteDSLBackend
+
+    return CuteDSLBackend(config)
+
+
 @SUPPORTED_ATTENTION_BACKENDS.register("fa")
 def create_fa_backend(config: ModelConfig):
     from .fa import FlashAttentionBackend
