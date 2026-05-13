@@ -1,59 +1,53 @@
 # Helm values for the gha-runner-scale-set chart that backs the
-# "mini-sglang-gpu" self-hosted runner pool used by .github/workflows/gpu-tests.yml.
+# "mini-sglang-gpu" self-hosted runner pool used by
+# .github/workflows/gpu-tests.yml.
 #
 # Install:
+#   kubectl create namespace arc-runners  # if missing
+#   kubectl create secret generic mini-sglang-gh-pat \
+#     --namespace arc-runners \
+#     --from-literal=github_token=ghp_REPLACE_ME
 #   helm install mini-sglang-gpu \
-#     --namespace arc-runners --create-namespace \
+#     --namespace arc-runners \
 #     -f deploy/arc/values.yaml \
 #     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 #
 # The release name ("mini-sglang-gpu") becomes the `runs-on` value in the
-# workflow. Do not rename it without updating the workflow.
+# workflow. Do not rename it without also updating the workflow.
 
 githubConfigUrl: "https://github.com/chakpongchung/mini-sglang"
-
-# Authenticate via the secret created out-of-band (see deploy/arc/README.md).
-# Prefer a GitHub App over a PAT for production; PAT is fine for a single
-# personal repo.
-githubConfigSecret: arc-github-secret
-
-# Cluster-internal address of the controller's listener service.
-# Default works for a single-namespace install; override if you put the
-# controller elsewhere.
-controllerServiceAccount:
-  namespace: arc-systems
-  name: arc-gha-rs-controller
+githubConfigSecret: mini-sglang-gh-pat
 
 minRunners: 0
 maxRunners: 2
 
-# Runner pod template. The default ARC runner image
-# (ghcr.io/actions/actions-runner) ships without CUDA, so we override with
-# a custom image built from deploy/arc/runner.Dockerfile.
+# Runner pod template. Jobs run directly inside this pod (no
+# containerMode: kubernetes), so GPU resources, the nvidia runtime class
+# and the nodeSelector all go here.
+#
+# Caveat: ghcr.io/actions/actions-runner is the default ARC runner image
+# and ships WITHOUT CUDA toolkit / python3.12 / uv. Until a CUDA-enabled
+# runner image is built and pushed to a registry reachable from all k3s
+# nodes, workflows that JIT-compile (sgl_kernel, flashinfer) will fail at
+# install time. See deploy/arc/runner.Dockerfile and the README for the
+# image-build path.
 template:
   spec:
-    # If your k3s containerd is configured with a `nvidia` runtime class,
-    # uncomment the next line. Otherwise the nvidia-device-plugin handles
-    # passthrough via the resource limit alone.
-    # runtimeClassName: nvidia
+    # Pin to the only node with >=2 GPUs (tests/kernel/test_tensor.py uses
+    # cuda:1). Update both this selector and the cluster if a second
+    # multi-GPU node comes online.
+    nodeSelector:
+      kubernetes.io/hostname: ailab-debian
+    runtimeClassName: nvidia
     containers:
       - name: runner
-        image: ghcr.io/chakpongchung/mini-sglang-runner:latest
-        imagePullPolicy: Always
+        image: ghcr.io/actions/actions-runner:2.334.0
         command: ["/home/runner/run.sh"]
         env:
           - name: NVIDIA_VISIBLE_DEVICES
             value: "all"
           - name: NVIDIA_DRIVER_CAPABILITIES
             value: "compute,utility"
-          # Persist HF/flashinfer/tvm caches across job runs to avoid
-          # re-downloading on every PR.
-          - name: HF_HOME
-            value: /home/runner/_work/_caches/hf
-          - name: FLASHINFER_WORKSPACE_BASE
-            value: /home/runner/_work/_caches/flashinfer
-          - name: TVM_FFI_CACHE_DIR
-            value: /home/runner/_work/_caches/tvm
         resources:
           limits:
             nvidia.com/gpu: "2"
@@ -61,12 +55,5 @@ template:
             cpu: "4"
           requests:
             nvidia.com/gpu: "2"
-            memory: "8Gi"
-            cpu: "2"
-        volumeMounts:
-          - name: cache
-            mountPath: /home/runner/_work/_caches
-    volumes:
-      - name: cache
-        emptyDir:
-          sizeLimit: 50Gi
+            memory: "4Gi"
+            cpu: "1"
