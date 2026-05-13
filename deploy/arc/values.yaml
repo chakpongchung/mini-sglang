@@ -1,0 +1,72 @@
+# Helm values for the gha-runner-scale-set chart that backs the
+# "mini-sglang-gpu" self-hosted runner pool used by .github/workflows/gpu-tests.yml.
+#
+# Install:
+#   helm install mini-sglang-gpu \
+#     --namespace arc-runners --create-namespace \
+#     -f deploy/arc/values.yaml \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+#
+# The release name ("mini-sglang-gpu") becomes the `runs-on` value in the
+# workflow. Do not rename it without updating the workflow.
+
+githubConfigUrl: "https://github.com/chakpongchung/mini-sglang"
+
+# Authenticate via the secret created out-of-band (see deploy/arc/README.md).
+# Prefer a GitHub App over a PAT for production; PAT is fine for a single
+# personal repo.
+githubConfigSecret: arc-github-secret
+
+# Cluster-internal address of the controller's listener service.
+# Default works for a single-namespace install; override if you put the
+# controller elsewhere.
+controllerServiceAccount:
+  namespace: arc-systems
+  name: arc-gha-rs-controller
+
+minRunners: 0
+maxRunners: 2
+
+# Runner pod template. The default ARC runner image
+# (ghcr.io/actions/actions-runner) ships without CUDA, so we override with
+# a custom image built from deploy/arc/runner.Dockerfile.
+template:
+  spec:
+    # If your k3s containerd is configured with a `nvidia` runtime class,
+    # uncomment the next line. Otherwise the nvidia-device-plugin handles
+    # passthrough via the resource limit alone.
+    # runtimeClassName: nvidia
+    containers:
+      - name: runner
+        image: ghcr.io/chakpongchung/mini-sglang-runner:latest
+        imagePullPolicy: Always
+        command: ["/home/runner/run.sh"]
+        env:
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: "all"
+          - name: NVIDIA_DRIVER_CAPABILITIES
+            value: "compute,utility"
+          # Persist HF/flashinfer/tvm caches across job runs to avoid
+          # re-downloading on every PR.
+          - name: HF_HOME
+            value: /home/runner/_work/_caches/hf
+          - name: FLASHINFER_WORKSPACE_BASE
+            value: /home/runner/_work/_caches/flashinfer
+          - name: TVM_FFI_CACHE_DIR
+            value: /home/runner/_work/_caches/tvm
+        resources:
+          limits:
+            nvidia.com/gpu: "2"
+            memory: "16Gi"
+            cpu: "4"
+          requests:
+            nvidia.com/gpu: "2"
+            memory: "8Gi"
+            cpu: "2"
+        volumeMounts:
+          - name: cache
+            mountPath: /home/runner/_work/_caches
+    volumes:
+      - name: cache
+        emptyDir:
+          sizeLimit: 50Gi

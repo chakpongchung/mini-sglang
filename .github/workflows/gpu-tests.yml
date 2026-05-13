@@ -1,19 +1,19 @@
-# Manual-dispatch GPU test workflow.
+# GPU test workflow.
 #
-# Targets a self-hosted runner deployed in a local k3s cluster with the labels
-# [self-hosted, linux, gpu]. The runner pod must satisfy these prerequisites:
+# Targets the "mini-sglang-gpu" runner scale set provisioned by Actions Runner
+# Controller (ARC) on the local k3s cluster. See deploy/arc/ for the Helm
+# values, the CUDA-enabled runner Dockerfile, and the setup runbook.
 #
+# Runtime expectations on the runner pod (enforced by deploy/arc/values.yaml +
+# runner.Dockerfile):
 #   - Linux x86_64 or aarch64 (mini-sglang is Linux-only).
-#   - NVIDIA device plugin installed on the k3s node, and the pod requests
-#     `nvidia.com/gpu: 2` (or has `runtimeClassName: nvidia` with
-#     `NVIDIA_VISIBLE_DEVICES=all`).
-#   - At least 2 GPUs visible inside the pod — tests/kernel/test_tensor.py
-#     hard-codes device="cuda:1", so a single-GPU pod will fail kernel tests.
+#   - >=2 GPUs visible — tests/kernel/test_tensor.py hard-codes device="cuda:1".
 #   - CUDA toolkit reachable (sgl_kernel / flashinfer JIT-compile at import).
-#   - python3.10+ (default 3.12), plus git and curl available.
-#   - uv may be preinstalled; if not, this workflow installs it inline.
+#   - python3.10+ (default 3.12), uv, git, curl preinstalled.
 #
-# Trigger from the GitHub Actions UI: Actions → "GPU Tests" → Run workflow.
+# Triggers:
+#   - pull_request to main (auto-fires on PR open/update; skips docs).
+#   - workflow_dispatch (manual, with optional python-version / pytest-args).
 
 name: GPU Tests
 
@@ -37,7 +37,9 @@ on:
 
 jobs:
   pytest:
-    runs-on: [self-hosted, linux, gpu]
+    # ARC scale-set name (see deploy/arc/values.yaml). Renaming the Helm
+    # release means updating this value too.
+    runs-on: mini-sglang-gpu
     timeout-minutes: 60
     env:
       UV_LINK_MODE: copy
@@ -50,14 +52,8 @@ jobs:
         run: |
           nvidia-smi
           python3 --version
+          uv --version
           uname -a
-
-      - name: Install uv if missing
-        run: |
-          if ! command -v uv >/dev/null 2>&1; then
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          fi
 
       - name: Create venv and install package
         env:
