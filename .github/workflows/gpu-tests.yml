@@ -28,6 +28,12 @@ on:
         description: "Extra args passed to pytest (e.g. -k pattern, -x)"
         default: ""
         type: string
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "assets/**"
 
 jobs:
   pytest:
@@ -38,7 +44,7 @@ jobs:
       HF_HUB_DISABLE_TELEMETRY: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
       - name: Show GPU and toolchain
         run: |
@@ -54,12 +60,16 @@ jobs:
           fi
 
       - name: Create venv and install package
+        env:
+          PY_VERSION: ${{ inputs.python-version || '3.12' }}
         run: |
-          uv venv --python=python${{ inputs.python-version }} .venv
+          uv venv --python=python${PY_VERSION} .venv
           . .venv/bin/activate
           uv pip install -e ".[dev]"
 
       - name: Run pytest
+        env:
+          PYTEST_EXTRA: ${{ inputs.pytest-args || '' }}
         run: |
           . .venv/bin/activate
-          pytest tests/ -v ${{ inputs.pytest-args }}
+          pytest tests/ -v ${PYTEST_EXTRA}
