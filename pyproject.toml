@@ -114,6 +114,14 @@ addopts = [
     "--cov=minisgl",
     "--cov-report=term-missing",
     "--cov-report=html",
+    # These files use the @call_if_main script-style decorator and run as
+    # standalone __main__ scripts. They aren't structured as pytest tests
+    # and would otherwise trip collection (e.g. test_tensor.py imports the
+    # kernel API symbol `test_tensor`, which pytest then tries to run as
+    # a test function).
+    "--ignore=tests/kernel/test_tensor.py",
+    "--ignore=tests/kernel/test_comm.py",
+    "--ignore=tests/core/test_scheduler.py",
 ]
 
 [tool.mypy]

@@ -1,0 +1,104 @@
+# GPU test workflow.
+#
+# Targets the "mini-sglang-gpu" runner scale set provisioned by Actions Runner
+# Controller (ARC) on the local k3s cluster. See deploy/arc/ for the Helm
+# values and setup runbook.
+#
+# Runner pod expectations (set in deploy/arc/values.yaml):
+#   - Scheduled on a node with >=2 GPUs (tests/kernel/test_tensor.py uses cuda:1).
+#   - runtimeClassName: nvidia + nvidia.com/gpu resource request → nvidia-smi works.
+#
+# The default ARC runner image (ghcr.io/actions/actions-runner) ships without
+# CUDA toolkit, Python 3.12, or uv, so this workflow installs them inline. When
+# a CUDA-enabled runner image (deploy/arc/runner.Dockerfile) is built and
+# pushed to a registry reachable from the k3s nodes, the values.yaml image ref
+# can be switched and the "Install build deps" / "Install CUDA toolkit" /
+# "Install uv" steps below can be deleted.
+#
+# Triggers:
+#   - pull_request to main (auto-fires on PR open/update; skips docs).
+#   - workflow_dispatch (manual, with optional python-version / pytest-args).
+
+name: GPU Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      python-version:
+        description: "Python version used to create the venv"
+        default: "3.12"
+        type: string
+      pytest-args:
+        description: "Extra args passed to pytest (e.g. -k pattern, -x)"
+        default: ""
+        type: string
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "assets/**"
+
+jobs:
+  pytest:
+    # ARC scale-set name (see deploy/arc/values.yaml). Renaming the Helm
+    # release means updating this value too.
+    runs-on: mini-sglang-gpu
+    timeout-minutes: 90
+    env:
+      UV_LINK_MODE: copy
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Show GPU and base toolchain
+        run: |
+          nvidia-smi
+          python3 --version || true
+          uname -a
+          cat /etc/os-release
+
+      - name: Install build deps and Python 3.12
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            software-properties-common ca-certificates curl gnupg
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3.12 python3.12-venv python3.12-dev build-essential git
+
+      - name: Install CUDA toolkit (nvcc) for sgl_kernel / flashinfer JIT
+        run: |
+          # ~5 min per run on first install; switch to a custom image with
+          # CUDA pre-baked (deploy/arc/runner.Dockerfile) to eliminate this.
+          UBUNTU_VER=$(. /etc/os-release && echo "${VERSION_ID//./}")
+          curl -fsSL -o cuda-keyring.deb \
+            "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-keyring_1.1-1_all.deb"
+          sudo dpkg -i cuda-keyring.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-toolkit-12-8
+          echo "/usr/local/cuda-12.8/bin" >> "$GITHUB_PATH"
+          echo "CUDA_HOME=/usr/local/cuda-12.8" >> "$GITHUB_ENV"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Create venv and install package
+        env:
+          PY_VERSION: ${{ inputs.python-version || '3.12' }}
+        run: |
+          uv venv --python=python${PY_VERSION} .venv
+          . .venv/bin/activate
+          uv pip install -e ".[dev]"
+
+      - name: Run pytest
+        env:
+          PYTEST_EXTRA: ${{ inputs.pytest-args || '' }}
+        run: |
+          . .venv/bin/activate
+          pytest tests/ -v ${PYTEST_EXTRA}

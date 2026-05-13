@@ -1,0 +1,59 @@
+# Helm values for the gha-runner-scale-set chart that backs the
+# "mini-sglang-gpu" self-hosted runner pool used by
+# .github/workflows/gpu-tests.yml.
+#
+# Install:
+#   kubectl create namespace arc-runners  # if missing
+#   kubectl create secret generic mini-sglang-gh-pat \
+#     --namespace arc-runners \
+#     --from-literal=github_token=ghp_REPLACE_ME
+#   helm install mini-sglang-gpu \
+#     --namespace arc-runners \
+#     -f deploy/arc/values.yaml \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+#
+# The release name ("mini-sglang-gpu") becomes the `runs-on` value in the
+# workflow. Do not rename it without also updating the workflow.
+
+githubConfigUrl: "https://github.com/chakpongchung/mini-sglang"
+githubConfigSecret: mini-sglang-gh-pat
+
+minRunners: 0
+maxRunners: 2
+
+# Runner pod template. Jobs run directly inside this pod (no
+# containerMode: kubernetes), so GPU resources, the nvidia runtime class
+# and the nodeSelector all go here.
+#
+# Caveat: ghcr.io/actions/actions-runner is the default ARC runner image
+# and ships WITHOUT CUDA toolkit / python3.12 / uv. Until a CUDA-enabled
+# runner image is built and pushed to a registry reachable from all k3s
+# nodes, workflows that JIT-compile (sgl_kernel, flashinfer) will fail at
+# install time. See deploy/arc/runner.Dockerfile and the README for the
+# image-build path.
+template:
+  spec:
+    # Pin to the only node with >=2 GPUs (tests/kernel/test_tensor.py uses
+    # cuda:1). Update both this selector and the cluster if a second
+    # multi-GPU node comes online.
+    nodeSelector:
+      kubernetes.io/hostname: ailab-debian
+    runtimeClassName: nvidia
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:2.334.0
+        command: ["/home/runner/run.sh"]
+        env:
+          - name: NVIDIA_VISIBLE_DEVICES
+            value: "all"
+          - name: NVIDIA_DRIVER_CAPABILITIES
+            value: "compute,utility"
+        resources:
+          limits:
+            nvidia.com/gpu: "2"
+            memory: "16Gi"
+            cpu: "4"
+          requests:
+            nvidia.com/gpu: "2"
+            memory: "4Gi"
+            cpu: "1"
